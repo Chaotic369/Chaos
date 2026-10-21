@@ -70,7 +70,7 @@ class Executor(private val ctx: Context) {
                     ctx.startActivity(i)
                     Outcome(true, "Alarm set for %02d:%02d".format(a.hour, a.minute))
                 }
-                is Action.SysAction -> SystemControl.run(ctx, a.cmd)
+                is Action.SysAction -> SystemControl.run(ctx, a.cmd, aiProvider())
                 is Action.ReadNotifications -> NotifActions.read(aiProvider())
                 is Action.ReplyNotif -> NotifActions.reply(a.text)
                 is Action.Agent, is Action.RunSkill, is Action.TeachStart, is Action.TeachDone ->

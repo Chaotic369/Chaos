@@ -3,6 +3,7 @@ package com.chandan.assistant.core
 import android.content.Context
 import com.chandan.assistant.a11y.AssistantAccessibilityService
 import com.chandan.assistant.core.ai.AiClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -19,18 +20,30 @@ class AgentRunner(private val ctx: Context, private val ai: AiClient, private va
         for (n in 1..maxSteps) {
             currentCoroutineContext().ensureActive()
             status("Step $n/$maxSteps: looking at screen")
-            val before = svc.changeCounter
-            val screen = svc.dumpTree()
-            val s = ai.nextAgentStep(goal, history, screen)
-            currentCoroutineContext().ensureActive()
-            when (s.action) {
-                "done" -> return Outcome(true, s.message.ifBlank { "Done" })
-                "ask_user" -> return Outcome(false, s.message.ifBlank { "I need your input" })
-                "fail" -> return Outcome(false, s.message.ifBlank { "I couldn't do that" })
-            }
-            val desc = AgentActions.describeStep(s)
-            status("Step $n/$maxSteps: $desc")
-            val ok = AgentActions.apply(ctx, svc, s, ai)
+                        val before = svc.changeCounter
+                        val screen = svc.dumpTree()
+                        val s = try {
+                            ai.nextAgentStep(goal, history, screen)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            return Outcome(false, e.message ?: "AI failed to read screen")
+                        }
+                        currentCoroutineContext().ensureActive()
+                        when (s.action) {
+                            "done" -> return Outcome(true, s.message.ifBlank { "Done" })
+                            "ask_user" -> return Outcome(false, s.message.ifBlank { "I need your input" })
+                            "fail" -> return Outcome(false, s.message.ifBlank { "I couldn't do that" })
+                        }
+                        val desc = AgentActions.describeStep(s)
+                        status("Step $n/$maxSteps: $desc")
+                        val ok = try {
+                            AgentActions.apply(ctx, svc, s, ai)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            false
+                        }
             val moved = when {
                 !ok -> false
                 s.action == "wait" || s.action == "open_app" -> {

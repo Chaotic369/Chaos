@@ -27,6 +27,7 @@ import com.chandan.assistant.data.AppDb
 import com.chandan.assistant.data.LogEntry
 import com.chandan.assistant.data.Nickname
 import com.chandan.assistant.data.Prefs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,9 +65,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val stopper: () -> Unit = { stop() }
 
     init {
-        Bus.addStopper(stopper)
-        viewModelScope.launch { busy.collect { Bus.setBusy("vm", it) } }
-    }
+            Bus.addStopper(stopper)
+            if (prefs.keepRunning) AssistantService.start(app)
+            viewModelScope.launch { busy.collect { Bus.setBusy("vm", it) } }
+            viewModelScope.launch { Bus.statusText.collect { if (!busy.value) status.value = it } }
+        }
 
     fun finishOnboarding() {
         prefs.onboarded = true
@@ -136,16 +139,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     )
                     status.value = out.message
-                    voice.speak(out.message)
-                    if (!out.ok) break
-                    if (i < parts.lastIndex) delay(1800)
-                }
-            } finally {
-                busy.value = false
-                if (!teaching.value) AssistantAccessibilityService.instance?.hideStop()
-            }
-        }
-    }
+                                        voice.speak(out.message)
+                                        if (!out.ok) break
+                                        if (i < parts.lastIndex) delay(1800)
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    val msg = e.message ?: "Something went wrong"
+                                    status.value = msg
+                                    voice.speak(msg)
+                                } finally {
+                                    busy.value = false
+                                    if (!teaching.value) AssistantAccessibilityService.instance?.hideStop()
+                                }
+                            }
+                        }
 
     fun stop() {
         job?.cancel()
@@ -189,11 +198,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 )
                 status.value = out.message
-                voice.speak(out.message)
-            } finally {
-                busy.value = false
-                AssistantAccessibilityService.instance?.hideStop()
-            }
+                                voice.speak(out.message)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                status.value = e.message ?: "Skill failed"
+                            } finally {
+                                busy.value = false
+                                AssistantAccessibilityService.instance?.hideStop()
+                            }
         }
     }
 

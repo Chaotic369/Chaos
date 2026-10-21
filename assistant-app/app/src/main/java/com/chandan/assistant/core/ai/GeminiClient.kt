@@ -75,16 +75,19 @@ class GeminiClient(private val apiKey: String, private val model: String) : AiCl
     }
 
     private val agentActions = listOf(
-        "click", "tap_visual", "long_click", "type", "enter", "scroll", "back", "home", "open_app", "wait", "done", "ask_user", "fail"
-    )
+            "click", "tap_visual", "long_click", "type", "enter", "scroll", "back", "home", "open_app",
+            "screenshot", "new_tab", "download_image", "wait", "done", "ask_user", "fail"
+        )
 
-    private val agentSystem = "You control an Android phone screen to reach a goal. " +
-        "You get the goal, past actions, and the current screen as a list of tappable nodes: [N] BTN/EDIT text desc id bounds. " +
-        "Reply with ONE next action. action: click (target=#N or visible label), long_click, type (target=#N of an EDIT node, or empty for the focused field; text=what to type), " +
-        "enter (press Enter/Search on the keyboard), scroll (direction=up or down), back, home, open_app (target=app name), wait, " +
-        "tap_visual (target=description of what to tap, only if the needed element is missing from the list), " +
-        "done (message=short result, use as soon as the goal is complete), ask_user (message=question), fail (message=why). " +
-        "Prefer #N targets. Never repeat an action that failed or changed nothing; try something different."
+        private val agentSystem = "You control an Android phone screen to reach a goal. " +
+            "You get the goal, past actions, and the current screen as a list of tappable nodes: [N] BTN/EDIT text desc id bounds. " +
+            "Reply with ONE next action. action: click (target=#N or visible label), long_click (target=#N or visible label), " +
+            "type (target=#N of an EDIT node, or empty for the focused field; text=what to type), " +
+            "enter (press Enter/Search on the keyboard), scroll (direction=up or down), back, home, open_app (target=app name), " +
+            "screenshot (take a screenshot), new_tab (open a new browser tab), download_image (long-press and download the image on screen), wait, " +
+            "tap_visual (target=description of what to tap, only if the needed element is missing from the list), " +
+            "done (message=short result, use as soon as the goal is complete), ask_user (message=question), fail (message=why). " +
+            "Prefer #N targets. Never repeat an action that failed or changed nothing; try something different."
 
     private val agentSchema: JsonObject = buildJsonObject {
         put("type", "OBJECT")

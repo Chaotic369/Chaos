@@ -15,6 +15,8 @@ class VoiceController(private val ctx: Context) {
     val level = MutableStateFlow(0f)
     private var rec: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
+    val isSpeaking: Boolean
+        get() = runCatching { tts?.isSpeaking == true }.getOrDefault(false)
 
     init {
         tts = TextToSpeech(ctx) { status ->
@@ -71,12 +73,14 @@ class VoiceController(private val ctx: Context) {
     }
 
     fun stopListening() {
-        rec?.cancel()
-        rec?.destroy()
-        rec = null
-        listening.value = false
-        level.value = 0f
-    }
+            runCatching {
+                rec?.cancel()
+                rec?.destroy()
+            }
+            rec = null
+            listening.value = false
+            level.value = 0f
+        }
 
     fun speak(text: String) {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "assistant")

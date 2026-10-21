@@ -6,6 +6,9 @@ import java.util.concurrent.CopyOnWriteArrayList
 /** Shared busy flag and stop handlers between the UI and the background service. */
 object Bus {
     val busy = MutableStateFlow(false)
+    val continuousMode = MutableStateFlow(false)
+    val listening = MutableStateFlow(false)
+    val statusText = MutableStateFlow("Ready")
     private val owners = mutableSetOf<String>()
     private val stoppers = CopyOnWriteArrayList<() -> Unit>()
 

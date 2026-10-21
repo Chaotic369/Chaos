@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.ContactsContract
 import androidx.core.content.ContextCompat
 import com.chandan.assistant.data.AppDb
@@ -58,31 +59,55 @@ class FastRouter(private val ctx: Context, private val db: AppDb) {
     private val callA = Regex("^(?:please\\s+)?(?:call|phone|dial)\\s+(.+)$", ic)
     private val callB = Regex("^(.+?)\\s+(?:ko\\s+)?(?:call|phone)(?:\\s+(?:karo|kar|kijiye|laga|lagao))?$", ic)
     private val openA = Regex("^(?:please\\s+)?(?:open|launch|start|khol|kholo)\\s+(.+)$", ic)
-    private val openB = Regex("^(.+?)\\s+(?:open|khol|kholo)(?:\\s+karo)?$", ic)
-    private val stopWords = setOf("stop", "ruko", "ruk jao", "band karo", "cancel", "रुको", "बंद करो")
+        private val openB = Regex("^(.+?)\\s+(?:open|khol|kholo)(?:\\s+karo)?$", ic)
+        private val chromeSearchA = Regex("^(?:please\\s+)?(?:open\\s+chrome\\s+and\\s+)?(?:search|google|find|look\\s+up)\\s+(?:for\\s+)?(.+?)(?:\\s+(?:on|in)\\s+(?:google\\s+)?chrome|\\s+(?:on|in)\\s+google)?$", ic)
+        private val chromeSearchB = Regex("^(?:please\\s+)?(?:on|in)\\s+(?:google\\s+)?chrome\\s+(?:search|find|look\\s+up)\\s+(?:for\\s+)?(.+)$", ic)
+        private val stopWords = setOf("stop", "ruko", "ruk jao", "band karo", "cancel", "रुको", "बंद करो")
 
-    private val teachRe = Regex("^(?:learn this|teach mode|learn karo)(?:\\s+(?:as|named|call it)\\s+(.+))?$", ic)
-    private val doneWords = setOf("done", "finished", "finish", "save skill", "ho gaya", "ho gya", "khatam")
-    private val skillPrefixes = setOf("run", "do", "start", "execute", "chalao", "chalu")
-    private val notifRe = Regex("^(?:read|check|show|what are)?\\s*(?:my\\s+)?(?:new\\s+)?notifications?$", ic)
-    private val replyRe = Regex("^(?:reply|jawab)\\s+(.+)$", ic)
+        private val teachRe = Regex("^(?:learn this|teach mode|learn karo)(?:\\s+(?:as|named|call it)\\s+(.+))?$", ic)
+        private val doneWords = setOf("done", "finished", "finish", "save skill", "ho gaya", "ho gya", "khatam")
+        private val skillPrefixes = setOf("run", "do", "start", "execute", "chalao", "chalu")
+        private val notifRe = Regex("^(?:read|check|show|what are)?\\s*(?:my\\s+)?(?:new\\s+)?notifications?$", ic)
+        private val replyRe = Regex("^(?:reply|jawab)\\s+(.+)$", ic)
 
-    suspend fun route(raw: String): Action {
-        val t = raw.trim()
-        if (t.lowercase() in stopWords) return Action.Stop
-        teachRe.matchEntire(t)?.let { return Action.TeachStart(it.groupValues[1].trim()) }
-        if (t.lowercase() in doneWords) return Action.TeachDone
-        val sk = matchSkill(t)
-        if (sk != null) return sk
-        if (notifRe.matches(t)) return Action.ReadNotifications
-        replyRe.matchEntire(t)?.let { return Action.ReplyNotif(it.groupValues[1].trim()) }
-        if (t.split(" ").size <= 8) SystemCommands.parse(t)?.let { return Action.SysAction(it) }
-        callA.matchEntire(t)?.let { return resolveCall(it.groupValues[1].trim()) }
-        callB.matchEntire(t)?.let { return resolveCall(it.groupValues[1].trim()) }
-        openA.matchEntire(t)?.let { return resolveOpen(it.groupValues[1].trim()) }
-        openB.matchEntire(t)?.let { return resolveOpen(it.groupValues[1].trim()) }
-        return resolveBare(t)
-    }
+        suspend fun route(raw: String): Action {
+            val t = raw.trim()
+            if (t.lowercase() in stopWords) return Action.Stop
+            teachRe.matchEntire(t)?.let { return Action.TeachStart(it.groupValues[1].trim()) }
+            if (t.lowercase() in doneWords) return Action.TeachDone
+            val sk = matchSkill(t)
+            if (sk != null) return sk
+            if (notifRe.matches(t)) return Action.ReadNotifications
+            replyRe.matchEntire(t)?.let { return Action.ReplyNotif(it.groupValues[1].trim()) }
+            if (t.split(" ").size <= 14) SystemCommands.parse(t)?.let { return Action.SysAction(it) }
+            chromeSearchB.matchEntire(t)?.let {
+                val q = it.groupValues[1].trim()
+                if (q.isNotEmpty()) return buildChromeSearch(q)
+            }
+            chromeSearchA.matchEntire(t)?.let {
+                val q = it.groupValues[1].trim()
+                if (q.isNotEmpty() && !q.contains(" on ") && !q.contains(" in ")) return buildChromeSearch(q)
+            }
+            callA.matchEntire(t)?.let { return resolveCall(it.groupValues[1].trim()) }
+            callB.matchEntire(t)?.let { return resolveCall(it.groupValues[1].trim()) }
+            openA.matchEntire(t)?.let {
+                val target = it.groupValues[1].trim()
+                if (target.split(" ").size <= 4) return resolveOpen(target)
+            }
+            openB.matchEntire(t)?.let {
+                val target = it.groupValues[1].trim()
+                if (target.split(" ").size <= 4) return resolveOpen(target)
+            }
+            return resolveBare(t)
+        }
+
+        private fun buildChromeSearch(query: String): Action {
+            val url = "https://www.google.com/search?q=${Uri.encode(query)}"
+            return Action.Launch(
+                Intent.ACTION_VIEW, url, "com.android.chrome", emptyMap(),
+                null, "Chrome search: $query", ""
+            )
+        }
 
     private suspend fun matchSkill(t: String): Action? = withContext(Dispatchers.IO) {
         val skills = db.skillDao().list()

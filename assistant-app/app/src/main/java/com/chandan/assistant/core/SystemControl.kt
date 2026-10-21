@@ -10,15 +10,52 @@ import android.os.Build
 import android.provider.AlarmClock
 import android.provider.Settings
 import com.chandan.assistant.a11y.AssistantAccessibilityService
+import com.chandan.assistant.core.ai.AiClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
-/** kind: wifi | bluetooth | airplane | dnd | volume | brightness | force_stop | timer */
+/** kind: wifi | bluetooth | airplane | dnd | volume | brightness | force_stop | timer | screenshot | new_tab | download_image | scroll | back | home | recents | tap_target | long_press_target | type_text | enter */
 data class SysCmd(val kind: String, val on: Boolean = true, val value: String = "")
 
 object SystemCommands {
     fun parse(raw: String): SysCmd? {
         val t = raw.lowercase().trim().replace("wi-fi", "wifi").replace("wi fi", "wifi")
+        if (Regex("""^(?:take\s+(?:a\s+)?)?screen\s*shot(?:\s+lo|\s+le\s+lo)?$""").matches(t)) {
+            return SysCmd("screenshot")
+        }
+        if (Regex("""^(?:open\s+(?:a\s+)?)?new\s+tab(?:\s+(?:in|on)\s+chrome)?$""").matches(t)) {
+            return SysCmd("new_tab")
+        }
+        if (Regex("""^(?:please\s+)?(?:download|save)\s+(?:the\s+)?(?:current(?:ly)?\s+)?(?:this\s+)?(?:picture|image|photo)(?:\s+.*)?$""").matches(t)) {
+            return SysCmd("download_image")
+        }
+        if (t in setOf("back", "go back", "navigate back", "peeche jao", "piche jao")) {
+            return SysCmd("back")
+        }
+        if (t in setOf("home", "go home", "home screen", "go to home")) {
+            return SysCmd("home")
+        }
+        if (t in setOf("recents", "recent apps", "show recents")) {
+            return SysCmd("recents")
+        }
+        if (t in setOf("press enter", "hit enter", "enter", "press search", "hit search")) {
+            return SysCmd("enter")
+        }
+        Regex("""^(?:scroll|swipe)\s+(down|up|left|right)$""").find(t)?.let {
+            return SysCmd("scroll", value = it.groupValues[1])
+        }
+        Regex("""^(?:long[\s-]?press|hold|long[\s-]?click)\s+(?:on\s+)?(?:the\s+)?(.+)$""").find(raw.trim())?.let {
+            return SysCmd("long_press_target", value = it.groupValues[1].trim())
+        }
+        Regex("""^(?:tap|click|press)\s+(?:on\s+)?(?:the\s+)?(.+)$""", RegexOption.IGNORE_CASE).find(raw.trim())?.let {
+            val target = it.groupValues[1].trim()
+            if (!target.equals("enter", true) && !target.equals("search", true)) {
+                return SysCmd("tap_target", value = target)
+            }
+        }
+        Regex("""^(?:type|write|enter\s+text)\s+(.+)$""", RegexOption.IGNORE_CASE).find(raw.trim())?.let {
+            return SysCmd("type_text", value = it.groupValues[1].trim())
+        }
         Regex("""^force[\s-]?stop\s+(.+)$""").find(t)?.let { return SysCmd("force_stop", value = it.groupValues[1].trim()) }
         Regex("""timer.*?(\d+)\s*(second|sec|minute|min|hour|hr)""").find(t)?.let {
             val n = it.groupValues[1].toInt()
@@ -71,7 +108,7 @@ object Apps {
 }
 
 object SystemControl {
-    suspend fun run(ctx: Context, c: SysCmd): Outcome = try {
+    suspend fun run(ctx: Context, c: SysCmd, ai: AiClient? = null): Outcome = try {
         when (c.kind) {
             "wifi" -> toggle(c, "svc wifi " + en(c), listOf("Wi-Fi", "Internet", "WiFi"), "Wi-Fi")
             "bluetooth" -> toggle(c, "svc bluetooth " + en(c), listOf("Bluetooth"), "Bluetooth")
@@ -81,6 +118,91 @@ object SystemControl {
             "brightness" -> brightness(ctx, (c.value.toIntOrNull() ?: 50).coerceIn(0, 100))
             "force_stop" -> forceStop(ctx, c.value)
             "timer" -> timer(ctx, c.value.toIntOrNull() ?: 60)
+            "screenshot" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                if (svc.takeScreenshotNow()) Outcome(true, "Screenshot taken")
+                else Outcome(false, "Couldn't take screenshot")
+            }
+            "new_tab" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                if (svc.openNewTabInBrowser()) Outcome(true, "Opened new tab")
+                else Outcome(false, "Couldn't open new tab")
+            }
+            "download_image" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                if (svc.downloadCurrentImage()) Outcome(true, "Downloading image")
+                else Outcome(false, "Couldn't find Download image option")
+            }
+            "back" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                Outcome(true, "Back")
+            }
+            "home" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                Outcome(true, "Home")
+            }
+            "recents" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
+                Outcome(true, "Recent apps")
+            }
+            "enter" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                if (svc.imeEnter()) Outcome(true, "Pressed enter")
+                else Outcome(false, "Couldn't press enter")
+            }
+            "scroll" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                val dm = svc.resources.displayMetrics
+                val ok = when (c.value) {
+                    "up" -> svc.scroll(false)
+                    "left" -> svc.swipe(dm.widthPixels * 0.8f, dm.heightPixels * 0.5f, dm.widthPixels * 0.2f, dm.heightPixels * 0.5f)
+                    "right" -> svc.swipe(dm.widthPixels * 0.2f, dm.heightPixels * 0.5f, dm.widthPixels * 0.8f, dm.heightPixels * 0.5f)
+                    else -> svc.scroll(true)
+                }
+                if (ok) Outcome(true, "Scrolled ${c.value}") else Outcome(false, "Couldn't scroll")
+            }
+            "tap_target" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                val node = svc.findByLabels(listOf(c.value), false)
+                val ok = when {
+                    node != null -> svc.click(node)
+                    ai != null -> Vision.tap(svc, ai, c.value)
+                    else -> false
+                }
+                if (ok) Outcome(true, "Tapped ${c.value}")
+                else Outcome(false, "Couldn't find \"${c.value}\" on screen")
+            }
+            "long_press_target" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                val node = svc.findByLabels(listOf(c.value), false)
+                val ok = when {
+                    node != null -> svc.longClick(node)
+                    ai != null -> Vision.longTap(svc, ai, c.value)
+                    else -> false
+                }
+                if (ok) Outcome(true, "Long-pressed ${c.value}")
+                else Outcome(false, "Couldn't find \"${c.value}\" on screen")
+            }
+            "type_text" -> {
+                val svc = AssistantAccessibilityService.instance
+                    ?: return Outcome(false, "Turn on the accessibility service first")
+                val ed = svc.firstEditable() ?: return Outcome(false, "No text box found on screen")
+                if (svc.setText(ed, c.value)) Outcome(true, "Typed ${c.value}")
+                else Outcome(false, "Couldn't type into field")
+            }
             else -> Outcome(false, "Unknown system command")
         }
     } catch (e: CancellationException) {

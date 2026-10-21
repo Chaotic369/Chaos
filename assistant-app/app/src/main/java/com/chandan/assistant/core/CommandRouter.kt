@@ -41,28 +41,43 @@ class CommandRouter(private val ctx: Context, private val db: AppDb, private val
     }
 
     private suspend fun toAction(rr: RouteResult, cmd: String): Action = when (rr.action) {
-        "call" -> fast.resolveCall(rr.recipient)
-        "open_app" -> fast.resolveOpen(rr.app.ifBlank { rr.text }).let { if (it is Action.NoMatch) Action.Agent(cmd) else it }
-        "open_url" -> {
-            val t = rr.text.ifBlank { rr.app }
-            if (t.contains("://")) Action.OpenUrl(t, t)
-            else if (t.startsWith("www.")) Action.OpenUrl("https://$t", t)
-            else fast.resolveOpen(t)
+            "call" -> fast.resolveCall(rr.recipient)
+            "open_app" -> {
+                val targetApp = rr.app.ifBlank { rr.text }
+                val extraTask = rr.steps.isNotEmpty() || rr.recipient.isNotBlank() ||
+                    (rr.text.isNotBlank() && !rr.text.equals(targetApp, true))
+                if (targetApp.contains("chrome", true) && rr.text.isNotBlank() && !rr.text.equals(targetApp, true)) {
+                    val q = Uri.encode(rr.text)
+                    Action.Launch(Intent.ACTION_VIEW, "https://www.google.com/search?q=$q", "com.android.chrome", emptyMap(), null, "Chrome search: ${rr.text}", "")
+                } else if (extraTask) {
+                    Action.Agent(if (rr.steps.isEmpty()) cmd else "$cmd. Plan: ${rr.steps.joinToString("; ")}")
+                } else {
+                    fast.resolveOpen(targetApp).let { if (it is Action.NoMatch) Action.Agent(cmd) else it }
+                }
+            }
+            "open_url" -> {
+                val t = rr.text.ifBlank { rr.app }
+                if (t.contains("://")) Action.OpenUrl(t, t)
+                else if (t.startsWith("www.") || (t.contains('.') && !t.contains(' '))) Action.OpenUrl("https://$t", t)
+                else {
+                    val q = Uri.encode(t)
+                    Action.Launch(Intent.ACTION_VIEW, "https://www.google.com/search?q=$q", "com.android.chrome", emptyMap(), null, "Chrome search: $t", "")
+                }
+            }
+            "send_message", "send_email" -> messaging(rr, cmd)
+            "set_alarm" -> alarm(rr)
+            "screen_task" -> Action.Agent(if (rr.steps.isEmpty()) cmd else "$cmd. Plan: ${rr.steps.joinToString("; ")}")
+            "system" -> SystemCommands.parse(rr.text.ifBlank { cmd })?.let { Action.SysAction(it) } ?: Action.Agent(cmd)
+            "run_skill" -> Action.RunSkill(
+                rr.app.ifBlank { rr.text },
+                rr.steps.mapNotNull { s ->
+                    val i = s.indexOf('=')
+                    if (i > 0) s.substring(0, i).trim() to s.substring(i + 1).trim() else null
+                }.toMap()
+            )
+            "create_trigger" -> Action.Unknown("Add triggers in the Triggers tab.")
+            else -> Action.Agent(cmd)
         }
-        "send_message", "send_email" -> messaging(rr, cmd)
-        "set_alarm" -> alarm(rr)
-        "screen_task" -> Action.Agent(if (rr.steps.isEmpty()) cmd else "$cmd. Plan: ${rr.steps.joinToString("; ")}")
-        "system" -> SystemCommands.parse(rr.text)?.let { Action.SysAction(it) } ?: Action.Unknown("I can't do \"${rr.text}\" yet.")
-        "run_skill" -> Action.RunSkill(
-            rr.app.ifBlank { rr.text },
-            rr.steps.mapNotNull { s ->
-                val i = s.indexOf('=')
-                if (i > 0) s.substring(0, i).trim() to s.substring(i + 1).trim() else null
-            }.toMap()
-        )
-        "create_trigger" -> Action.Unknown("Add triggers in the Triggers tab.")
-        else -> Action.Unknown("I didn't understand that.")
-    }
 
     private fun alarm(rr: RouteResult): Action {
         val p = rr.text.trim().split(":")
