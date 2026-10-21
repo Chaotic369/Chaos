@@ -1,0 +1,138 @@
+name: Build Native Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "App name (shown under the launcher icon)"
+        required: false
+        default: "Chaos"
+        type: string
+      app_version:
+        description: "App version (e.g. 1.0.0)"
+        required: false
+        default: "1.0.0"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APP_NAME: ${{ github.event.inputs.app_name || 'Chaos' }}
+      APP_VERSION: ${{ github.event.inputs.app_version || '1.0.0' }}
+      RUN_NUMBER: ${{ github.run_number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Patch app name and version
+        run: |
+          python3 - <<'PY'
+          import os, re
+
+          name = os.environ["APP_NAME"]
+          ver = os.environ["APP_VERSION"]
+          run_number = int(os.environ.get("RUN_NUMBER", "1") or "1")
+
+          # ---- Manifest: android:label on the <application> tag ----
+          mp = "app/src/main/AndroidManifest.xml"
+          with open(mp, encoding="utf-8") as f:
+              s = f.read()
+          safe = (name.replace("&", "&amp;").replace('"', "&quot;")
+                      .replace("<", "&lt;").replace(">", "&gt;"))
+
+          def fix_app(m):
+              tag = m.group(0)
+              if re.search(r'android:label="[^"]*"', tag):
+                  return re.sub(r'android:label="[^"]*"',
+                                lambda _m: 'android:label="%s"' % safe, tag, count=1)
+              return tag.replace("<application", '<application android:label="%s"' % safe, 1)
+
+          s, n = re.subn(r"<application\b[^>]*>", fix_app, s, count=1)
+          if n == 0:
+              raise SystemExit("ERROR: <application> tag not found in AndroidManifest.xml")
+          with open(mp, "w", encoding="utf-8") as f:
+              f.write(s)
+
+          # ---- build.gradle.kts: versionName / versionCode ----
+          parts = [int(x) for x in re.findall(r"\d+", ver)[:3]]
+          while len(parts) < 3:
+              parts.append(0)
+          code = parts[0] * 10000 + parts[1] * 100 + parts[2]
+          if code <= 0:
+              code = run_number
+          vname = (ver.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$"))
+
+          gp = "app/build.gradle.kts"
+          with open(gp, encoding="utf-8") as f:
+              g = f.read()
+          g, n1 = re.subn(r'versionName\s*=\s*"[^"]*"',
+                          lambda _m: 'versionName = "%s"' % vname, g, count=1)
+          g, n2 = re.subn(r"versionCode\s*=\s*\d+",
+                          lambda _m: "versionCode = %d" % code, g, count=1)
+          if n1 == 0 or n2 == 0:
+              raise SystemExit("ERROR: versionName/versionCode not found in app/build.gradle.kts")
+          with open(gp, "w", encoding="utf-8") as f:
+              f.write(g)
+
+          print("Patched label=%r versionName=%r versionCode=%d" % (name, ver, code))
+          PY
+
+      - name: Inject launcher icon from build-icon.png
+        if: ${{ hashFiles('build-icon.png') != '' }}
+        run: |
+          python3 -m pip install pillow || python3 -m pip install --break-system-packages pillow
+          python3 - <<'PY'
+          import glob, os
+          from PIL import Image, ImageDraw, ImageOps
+
+          sizes = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
+          res = "app/src/main/res"
+          src = Image.open("build-icon.png").convert("RGBA")
+
+          # Remove existing launcher icons so resources do not clash (adaptive xml, webp, png)
+          for d in glob.glob(os.path.join(res, "mipmap*")):
+              for fn in os.listdir(d):
+                  stem = os.path.splitext(fn)[0]
+                  if stem in ("ic_launcher", "ic_launcher_round"):
+                      os.remove(os.path.join(d, fn))
+
+          for density, px in sizes.items():
+              out_dir = os.path.join(res, "mipmap-" + density)
+              os.makedirs(out_dir, exist_ok=True)
+              icon = ImageOps.fit(src, (px, px), Image.LANCZOS)
+              icon.save(os.path.join(out_dir, "ic_launcher.png"))
+
+              mask = Image.new("L", (px * 4, px * 4), 0)
+              ImageDraw.Draw(mask).ellipse((0, 0, px * 4 - 1, px * 4 - 1), fill=255)
+              mask = mask.resize((px, px), Image.LANCZOS)
+              round_icon = Image.new("RGBA", (px, px), (0, 0, 0, 0))
+              round_icon.paste(icon, (0, 0), mask)
+              round_icon.save(os.path.join(out_dir, "ic_launcher_round.png"))
+
+          print("Icon injected into mipmap-* densities")
+          PY
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.app_name || 'Chaos' }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
