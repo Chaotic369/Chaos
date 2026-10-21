@@ -24,6 +24,7 @@ jobs:
       APP_NAME: ${{ github.event.inputs.app_name || 'Chaos' }}
       APP_VERSION: ${{ github.event.inputs.app_version || '1.0.0' }}
       RUN_NUMBER: ${{ github.run_number }}
+      APP_ROOT: wrapper
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,18 +39,20 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
+          build-root-directory: wrapper
 
       - name: Patch app name and version
         run: |
           python3 - <<'PY'
           import os, re
 
+          root = os.environ["APP_ROOT"]
           name = os.environ["APP_NAME"]
           ver = os.environ["APP_VERSION"]
           run_number = int(os.environ.get("RUN_NUMBER", "1") or "1")
 
           # ---- Manifest: android:label on the <application> tag ----
-          mp = "app/src/main/AndroidManifest.xml"
+          mp = os.path.join(root, "app/src/main/AndroidManifest.xml")
           with open(mp, encoding="utf-8") as f:
               s = f.read()
           safe = (name.replace("&", "&amp;").replace('"', "&quot;")
@@ -64,7 +67,7 @@ jobs:
 
           s, n = re.subn(r"<application\b[^>]*>", fix_app, s, count=1)
           if n == 0:
-              raise SystemExit("ERROR: <application> tag not found in AndroidManifest.xml")
+              raise SystemExit("ERROR: <application> tag not found in " + mp)
           with open(mp, "w", encoding="utf-8") as f:
               f.write(s)
 
@@ -77,7 +80,7 @@ jobs:
               code = run_number
           vname = (ver.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$"))
 
-          gp = "app/build.gradle.kts"
+          gp = os.path.join(root, "app/build.gradle.kts")
           with open(gp, encoding="utf-8") as f:
               g = f.read()
           g, n1 = re.subn(r'versionName\s*=\s*"[^"]*"',
@@ -85,7 +88,7 @@ jobs:
           g, n2 = re.subn(r"versionCode\s*=\s*\d+",
                           lambda _m: "versionCode = %d" % code, g, count=1)
           if n1 == 0 or n2 == 0:
-              raise SystemExit("ERROR: versionName/versionCode not found in app/build.gradle.kts")
+              raise SystemExit("ERROR: versionName/versionCode not found in " + gp)
           with open(gp, "w", encoding="utf-8") as f:
               f.write(g)
 
@@ -101,7 +104,7 @@ jobs:
           from PIL import Image, ImageDraw, ImageOps
 
           sizes = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
-          res = "app/src/main/res"
+          res = os.path.join(os.environ["APP_ROOT"], "app/src/main/res")
           src = Image.open("build-icon.png").convert("RGBA")
 
           # Remove existing launcher icons so resources do not clash (adaptive xml, webp, png)
@@ -128,11 +131,12 @@ jobs:
           PY
 
       - name: Build debug APK
+        working-directory: wrapper
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.inputs.app_name || 'Chaos' }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
