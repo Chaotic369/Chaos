@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Assistant</string>
+    <string name="a11y_description">Lets the Assistant read the screen and tap, type and scroll for you.</string>
+</resources>
